@@ -1,7 +1,9 @@
+
+#pragma once
+
 #include <array>
 #include <cstddef>
 #include <cstring>
-#include <iostream>
 
 /* std::function replacement to store lambda of any size on stack*/
 template <size_t CtxSize, size_t Align, typename Ret, typename ...Args>
@@ -16,12 +18,13 @@ public:
         func = [](void* ctx, Args... args) { return (*static_cast<Lambda*>(ctx))(args...); };
         new (ctx.data()) Lambda{std::forward<Lambda>(lmb)};
     }
-    
+
     template <typename Ret_, typename ...Args_>
     function(Ret_(*ptr)(Args_...))
     {
-        func = [](void* ctx, Args ...args){ return (reinterpret_cast<Ret(*)(Args...)>(ctx))(args...); };
-        new (ctx.data()) decltype(ptr){ptr};
+        using FuncPtrT = decltype(ptr);
+        func = [](void* ctx, Args ...args){ return (reinterpret_cast<FuncPtrT>(ctx))(args...); };
+        new (ctx.data()) FuncPtrT{ptr};
     }
 
     template <typename Lambda>
@@ -41,8 +44,9 @@ public:
         static_assert(std::is_same_v<Ret_, Ret>);
         static_assert(std::is_same_v<std::tuple<Args_...>, std::tuple<Args...>>);
 
-        func = [](void* ctx, Args ...args){ return (reinterpret_cast<Ret(*)(Args...)>(ctx))(args...); };
-        new (ctx.data()) decltype(ptr){ptr};
+        using FuncPtrT = decltype(ptr);
+        func = [](void* ctx, Args ...args){ return (reinterpret_cast<FuncPtrT>(ctx))(args...); };
+        new (ctx.data()) FuncPtrT{ptr};
     }
 
     function() {
@@ -57,7 +61,7 @@ public:
     template<typename ...Args_>
     Ret operator()(Args_... args) {
         static_assert(std::is_same_v<std::tuple<Args_...>, std::tuple<Args...>>);
-    
+
         return func(ctx.data(), args...);
     }
 
@@ -73,22 +77,3 @@ function(Lambda&& lmb) ->
 template <typename Ret_, typename ...Args_>
 function(Ret_(*ptr)(Args_...)) ->
     function<sizeof(ptr), alignof(Ret_(*)(Args_...)), Ret_, Args_...>;
-
-
-int foo(int) { return 0; }
-
-int main()
-{
-    function f{[a=1, b=10](){}};
-    f = [f=5.6f, g=1](){};
-
-    f();
-
-    function f2{[](){}};
-
-    f2();
-
-    function f3{&foo};
-
-    // auto a = f3(1);
-}
