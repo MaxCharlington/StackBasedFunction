@@ -26,10 +26,22 @@ public:
     template <typename Functor> requires (not std::is_member_function_pointer_v<Functor>)
     function(Functor&& fctr) :
         executer{
-            [](std::byte* ctx, Args... args) {
-                Functor* l = reinterpret_cast<Functor*>(ctx);
-                return (*l)(args...);
-            }
+            []{
+                if constexpr (is_const_member_function_v<decltype(&Functor::operator())>)
+                {
+                    return [](std::byte* ctx, Args... args) {
+                        const Functor* l = reinterpret_cast<Functor*>(ctx);
+                        return (*l)(args...);
+                    };
+                }
+                else
+                {
+                    return [](std::byte* ctx, Args... args) {
+                        const Functor* l = reinterpret_cast<Functor*>(ctx);
+                        return (*l)(args...);
+                    };
+                }
+            }()
         },
         const_executer{
             []{
@@ -49,8 +61,10 @@ public:
         deleter{[](const std::byte* ctx) {
             const Functor* l = reinterpret_cast<const Functor*>(ctx);
             l->~Functor();
-        }},
-        func_type_info(typeid(Functor))
+        }}
+#ifdef std_function_compat
+        , func_type_info(typeid(Functor))
+#endif
     {
         new (ctx_storage.data()) Functor{std::forward<Functor>(fctr)};
     }
@@ -64,8 +78,10 @@ public:
             Func* f = *reinterpret_cast<Func**>(const_cast<std::byte*>(ctx));
             return f(args...);
         }},
-        deleter{[](const std::byte*) {}},
-        func_type_info{typeid(decltype(ptr))}
+        deleter{trivial_deleter}
+#ifdef std_function_compat
+        , func_type_info{typeid(decltype(ptr))}
+#endif
     {
         new (ctx_storage.data()) Func*{ptr};
     }
@@ -77,8 +93,10 @@ public:
             return (obj.*f)(args...);
         }},
         const_executer{[](const std::byte*, T&) { throw std::bad_function_call(); }},
-        deleter{[](const std::byte*) {}},
-        func_type_info{typeid(decltype(ptr))}
+        deleter{trivial_deleter}
+#ifdef std_function_compat
+        , func_type_info{typeid(decltype(ptr))}
+#endif
     {
         using MemberPtr = Ret_(T::*)(Args_...);
         new (ctx_storage.data()) MemberPtr{ptr};
@@ -94,8 +112,10 @@ public:
             Ret_(T::*f)(Args_...) const = *reinterpret_cast<Ret_(T::**)(Args_...) const>(const_cast<std::byte*>(ctx));
             return (obj.*f)(args...);
         }},
-        deleter{[](const std::byte*) {}},
-        func_type_info{typeid(decltype(ptr))}
+        deleter{trivial_deleter}
+#ifdef std_function_compat
+        , func_type_info{typeid(decltype(ptr))}
+#endif
     {
         using MemberPtr = Ret_(T::*)(Args_...) const;
         new (ctx_storage.data()) MemberPtr{ptr};
@@ -109,13 +129,12 @@ public:
 
         deleter(ctx_storage.data());
 
-        executer = [](std::byte* ctx, Args... args) {
-            Functor* l = reinterpret_cast<Functor*>(ctx);
-            return (*l)(args...);
-        };
-
         if constexpr (is_const_member_function_v<decltype(&Functor::operator())>)
         {
+            executer = [](std::byte* ctx, Args... args) {
+                const Functor* l = reinterpret_cast<const Functor*>(ctx);
+                return (*l)(args...);
+            };
             const_executer = [](const std::byte* ctx, Args... args) {
                 const Functor* l = reinterpret_cast<const Functor*>(ctx);
                 return (*l)(args...);
@@ -123,6 +142,10 @@ public:
         }
         else
         {
+            executer = [](std::byte* ctx, Args... args) {
+                Functor* l = reinterpret_cast<Functor*>(ctx);
+                return (*l)(args...);
+            };
             const_executer = [](const std::byte*) { throw std::bad_function_call(); };
         }
 
@@ -130,7 +153,10 @@ public:
             const Functor* l = reinterpret_cast<const Functor*>(ctx);
             l->~Functor();
         };
+
+#ifdef std_function_compat
         func_type_info = typeid(Functor);
+#endif
 
         new (ctx_storage.data()) Functor{std::forward<Functor>(fctr)};
         return *this;
@@ -151,8 +177,11 @@ public:
             Func* f = *reinterpret_cast<Func**>(const_cast<std::byte*>(ctx));
             return f(args...);
         };
-        deleter = [](const std::byte*) {};
+        deleter = trivial_deleter;
+
+#ifdef std_function_compat
         func_type_info = typeid(decltype(ptr));
+#endif
 
         new (ctx_storage.data()) Func*{ptr};
         return *this;
@@ -172,8 +201,11 @@ public:
             return obj.*f(args...);
         };
         const_executer = [](const std::byte*, T&) { throw std::bad_function_call(); };
-        deleter = [](const std::byte*) {};
+        deleter = trivial_deleter;
+
+#ifdef std_function_compat
         func_type_info = typeid(decltype(ptr));
+#endif
 
         using MemberPtr = Ret_(T::*)(Args...);
         new (ctx_storage.data()) MemberPtr{ptr};
@@ -196,27 +228,36 @@ public:
             Ret_(T::*f)(Args_...) const = *reinterpret_cast<Ret_(T::**)(Args_...) const>(const_cast<std::byte*>(ctx));
             return (obj.*f)(args...);
         };
-        deleter = [](const std::byte*) {};
+        deleter = trivial_deleter;
+
+#ifdef std_function_compat
         func_type_info = typeid(decltype(ptr));
+#endif
 
         using MemberPtr = Ret_(T::*)(Args_...) const;
         new (ctx_storage.data()) MemberPtr{ptr};
     }
 
-    function() {
-        executer = [](std::byte*){ throw std::bad_function_call{}; };
-        executer = [](const std::byte*){ throw std::bad_function_call{}; };
-        deleter = [](const std::byte*){};
-    }
+    function() :
+        executer{[](std::byte*){ throw std::bad_function_call{}; }},
+        const_executer{[](const std::byte*){ throw std::bad_function_call{}; }},
+        deleter{trivial_deleter}
+#ifdef std_function_compat
+        , func_type_info{typeid(void)}
+#endif
+    {}
 
-    function(std::nullptr_t) {
-        executer = [](std::byte*){ throw std::bad_function_call{}; };
-        executer = [](const std::byte*){ throw std::bad_function_call{}; };
-        deleter = [](const std::byte*){};
-    }
+    function(std::nullptr_t) :
+        executer{[](std::byte*){ throw std::bad_function_call{}; }},
+        const_executer{[](const std::byte*){ throw std::bad_function_call{}; }},
+        deleter{trivial_deleter}
+#ifdef std_function_compat
+        , func_type_info{typeid(void)}
+#endif
+    {}
 
-    function(const function&) = default;
-    function(function&&) noexcept = default;
+    function(const function&) = delete;
+    function(function&&) noexcept = delete;
     function& operator=(const function&) = delete;
     function& operator=(function&&) = delete;
 
@@ -240,20 +281,26 @@ public:
         return *this;
     }
 
+#ifdef std_function_compat
     const std::type_info& target_type() const noexcept
     {
         return func_type_info;
     }
+#endif
 
 private:
     constexpr static inline std::size_t context_size = CtxSize;
     constexpr static inline std::size_t context_alignment = Align;
 
+    static void trivial_deleter(const std::byte*) {}
+
     alignas(Align) std::array<std::byte, CtxSize> ctx_storage;  // lambda capture
     Ret(*executer)(std::byte*, Args...);
     Ret(*const_executer)(const std::byte*, Args...);
     void(*deleter)(const std::byte*);
+#ifdef std_function_compat
     std::reference_wrapper<const std::type_info> func_type_info;
+#endif
 };
 
 struct S_;

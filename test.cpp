@@ -1,8 +1,16 @@
 #include <iostream>
 #include <functional>
+#include <algorithm>
+#include <chrono>
+#include <iostream>
+#include<vector>
+
 #include "stack_based_function.hpp"
 
+using namespace std::chrono;
+
 int foo(int) { return 0; }
+void foo2() {}
 
 struct S
 {
@@ -37,4 +45,52 @@ int main()
 
     const function f6(&S::f2);
     f6(s);
+
+    // function<void(int)> f7{};
+
+    // Benchmark
+
+    std::cout << "std::function " << sizeof(std::function<void()>) << "byte\nstack function " << sizeof(function<4, 8, void()>) << "byte\n\n";
+
+    const size_t size = 5000000;
+    std::vector<std::function<void()>> arr_function;
+    std::vector<function<4, 4, void()>> arr_stack_function;
+
+    auto start = high_resolution_clock::now();
+    for (size_t i = 0; i < size; i++)
+    {
+        arr_function.push_back(foo2);
+    }
+    auto stop = high_resolution_clock::now();
+    auto duration = duration_cast<microseconds>(stop - start);
+    std::cout << "std::function " << duration.count() << " microseconds\n";
+
+    start = high_resolution_clock::now();
+    for (size_t i = 0; i < size; i++)
+    {
+        arr_function.push_back(foo2);
+    }
+    stop = high_resolution_clock::now();
+    duration = duration_cast<microseconds>(stop - start);
+    std::cout << "stack function " << duration.count() << " microseconds\n";
+
+    start = high_resolution_clock::now();
+    for (size_t i = 0; i < size; i++)
+    {
+        arr_function[i]();
+    }
+    stop = high_resolution_clock::now();
+    duration = duration_cast<microseconds>(stop - start);
+    std::cout << "std::function call " << duration.count() << " microseconds\n";
+
+    start = high_resolution_clock::now();
+    for (size_t i = 0; i < size; i++)
+    {
+        arr_function[i]();
+    }
+    stop = high_resolution_clock::now();
+    duration = duration_cast<microseconds>(stop - start);
+    std::cout << "stack function call " << duration.count() << " microseconds\n";
+
+    return 0;
 }
