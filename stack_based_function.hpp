@@ -1,4 +1,3 @@
-
 #pragma once
 
 #include <array>
@@ -114,59 +113,50 @@ public:
         static_assert(sizeof(Functor) <= CtxSize, "reassigned callable size should be less or equal than initial");
         static_assert(alignof(Functor) <= Align, "reassigned callable alignment should be less or equal than initial");
         static_assert(std::is_same_v<Ret(Args...), Signature<decltype(&Functor::operator())>>, "reassigned callable signature should be the same as initial");
+        static_assert(not(Trivial and not std::is_trivially_destructible_v<Functor>), "assigning to trivial stack_based_functon of not trivially destructible functor");
+        static_assert(not(Const && not is_const_member_function_v<decltype(&Functor::operator())>), "assigning of functor with non const call operator to const qualified stack_based_function");
 
-        if constexpr (Trivial and not std::is_trivially_destructible_v<Functor>)
+        if constexpr (not Trivial) {
+            this->deleter(ctx_storage.data());
+            this->deleter = [](const std::byte* ctx) {
+                const Functor* l = reinterpret_cast<const Functor*>(ctx);
+                l->~Functor();
+            };
+        }
+
+        if constexpr (is_const_member_function_v<decltype(&Functor::operator())> and Const)
         {
-            throw std::invalid_argument{"assigning to trivial stack_based_functon of not trivially destructible functor"};
+            const_executor = [](const std::byte* ctx, Args... args) {
+                const Functor* l = reinterpret_cast<const Functor*>(ctx);
+                return (*l)(args...);
+            };
+        }
+        else if constexpr (is_const_member_function_v<decltype(&Functor::operator())> and not Const)
+        {
+            this->executor = [](std::byte* ctx, Args... args) {
+                Functor* l = reinterpret_cast<Functor*>(ctx);
+                return (*l)(args...);
+            };
+            const_executor = [](const std::byte* ctx, Args... args) {
+                const Functor* l = reinterpret_cast<const Functor*>(ctx);
+                return (*l)(args...);
+            };
         }
         else
         {
-            if constexpr (not Trivial) {
-                this->deleter(ctx_storage.data());
-                this->deleter = [](const std::byte* ctx) {
-                    const Functor* l = reinterpret_cast<const Functor*>(ctx);
-                    l->~Functor();
-                };
-            }
-
-            if constexpr (is_const_member_function_v<decltype(&Functor::operator())> and Const)
-            {
-                const_executor = [](const std::byte* ctx, Args... args) {
-                    const Functor* l = reinterpret_cast<const Functor*>(ctx);
-                    return (*l)(args...);
-                };
-            }
-            else if constexpr (is_const_member_function_v<decltype(&Functor::operator())> and not Const)
-            {
-                this->executor = [](std::byte* ctx, Args... args) {
-                    Functor* l = reinterpret_cast<Functor*>(ctx);
-                    return (*l)(args...);
-                };
-                const_executor = [](const std::byte* ctx, Args... args) {
-                    const Functor* l = reinterpret_cast<const Functor*>(ctx);
-                    return (*l)(args...);
-                };
-            }
-            else if constexpr (not is_const_member_function_v<decltype(&Functor::operator())> and not Const)
-            {
-                this->executor = [](std::byte* ctx, Args... args) {
-                    Functor* l = reinterpret_cast<Functor*>(ctx);
-                    return (*l)(args...);
-                };
-                const_executor = [](const std::byte* ctx, Args...){ throw std::bad_function_call{}; };
-            }
-            else
-            {
-                throw std::invalid_argument{"assigning of functor with non const call operator to const qualified stack_based_function"};
-            }
+            this->executor = [](std::byte* ctx, Args... args) {
+                Functor* l = reinterpret_cast<Functor*>(ctx);
+                return (*l)(args...);
+            };
+            const_executor = [](const std::byte*, Args...){ throw std::bad_function_call{}; };
+        }
 
 #ifdef std_function_compat
-            func_type_info = typeid(Functor);
+        func_type_info = typeid(Functor);
 #endif
 
-            new (ctx_storage.data()) Functor{std::forward<Functor>(fctr)};
-            return *this;
-        }
+        new (ctx_storage.data()) Functor{std::forward<Functor>(fctr)};
+        return *this;
     }
 
     function& operator=(Ret(*ptr)(Args...))
@@ -273,15 +263,17 @@ public:
         return const_executor(ctx_storage.data(), args...);
     }
 
+#ifdef std_function_compat
     operator bool() const noexcept
     {
-        return static_cast<bool>(this->executer) && static_cast<bool>(const_executor);
+        return func_type_info != typeid(void);
     }
 
     bool operator==(std::nullptr_t) const noexcept
     {
         return *this;
     }
+#endif
 
 #ifdef std_function_compat
     const std::type_info& target_type() const noexcept
@@ -305,16 +297,14 @@ private:
 // DEDUCTION GUIDES
 struct S_;
 
-static constexpr std::size_t min_size_ = std::max(sizeof(void (S_::*)()), sizeof(void*));
-static constexpr std::size_t min_align_ = alignof(void (S_::*)());
 static constexpr bool Const = true;
 static constexpr bool Trivial = true;
 
 template <typename Functor>
 function(Functor&&) ->
     function<
-        std::max(sizeof(Functor), min_size_),
-        std::max(alignof(Functor), min_align_),
+        sizeof(Functor),
+        alignof(Functor),
         is_const_member_function_v<decltype(&Functor::operator())>,
         std::is_trivially_destructible_v<Functor>,
         Signature<decltype(&Functor::operator())>
@@ -323,8 +313,8 @@ function(Functor&&) ->
 template <typename Ret, typename ...Args>
 function(Ret(*)(Args...)) ->
     function<
-        std::max(sizeof(Ret(*)(Args...)), min_size_),
-        std::max(alignof(Ret(*)(Args...)), min_align_),
+        sizeof(Ret(*)(Args...)),
+        alignof(Ret(*)(Args...)),
         Const,
         Trivial,
         Ret(Args...)
@@ -333,8 +323,8 @@ function(Ret(*)(Args...)) ->
 template <typename T, typename Ret_, typename ...Args_>
 function(Ret_(T::*)(Args_...)) ->
     function<
-        std::max(sizeof(Ret_(T::*)(Args_...)), min_size_),
-        std::max(alignof(Ret_(T::*)(Args_...)), min_align_),
+        sizeof(Ret_(T::*)(Args_...)),
+        alignof(Ret_(T::*)(Args_...)),
         Const,
         Trivial,
         Ret_(T&, Args_...)
@@ -343,8 +333,8 @@ function(Ret_(T::*)(Args_...)) ->
 template <typename T, typename Ret_, typename ...Args_>
 function(Ret_(T::*)(Args_...) const) ->
     function<
-        std::max(sizeof(Ret_(T::*)(Args_...) const), min_size_),
-        std::max(alignof(Ret_(T::*)(Args_...) const), min_align_),
+        sizeof(Ret_(T::*)(Args_...) const),
+        alignof(Ret_(T::*)(Args_...) const),
         Const,
         Trivial,
         Ret_(const T&, Args_...)

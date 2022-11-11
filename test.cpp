@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <chrono>
 #include <iostream>
-#include<vector>
+#include <vector>
 
 #include "stack_based_function.hpp"
 
