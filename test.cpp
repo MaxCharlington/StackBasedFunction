@@ -32,12 +32,16 @@ int main()
     f2();
 
     function f3{&foo};
+    f3(1);
     f3 = foo;
+    f3(2);
 
     auto a = f3(1);
 
     function f4{[i=0lu](int){return 0;}};
+    f4(1);
     f4 = &foo;
+    f4(2);
 
     function f5(&S::f);
     S s{};
@@ -48,13 +52,16 @@ int main()
 
     // function<void(int)> f7{};
 
+    function f7{[a = 10](int b)mutable{ a = b; }};
+    f7(4);
+
     // Benchmark
 
-    std::cout << "std::function " << sizeof(std::function<void()>) << "byte\nstack function " << sizeof(function<4, 8, void()>) << "byte\n\n";
+    std::cout << "std::function " << sizeof(std::function<void()>) << "byte\nstack function " << sizeof(function<4, 8, IsConst, void()>) << "byte\n\n";
 
     const size_t size = 5000000;
     std::vector<std::function<void()>> arr_function;
-    std::vector<function<4, 4, void()>> arr_stack_function;
+    std::vector<function<4, 4, IsConst, void()>> arr_stack_function;
 
     auto start = high_resolution_clock::now();
     for (size_t i = 0; i < size; i++)

@@ -8,14 +8,15 @@
 
 #include "args_helper.hpp"
 #include "const_member_function_helper.hpp"
+#include "nonconst_executor.hpp"
 #include "signature_helper.hpp"
 
-template<size_t CtxSize, size_t Align, typename Signature_>
+template<size_t CtxSize, size_t Align, bool Const, typename Signature_>
 class function;
 
 /* std::function replacement with stack storage */
-template <size_t CtxSize, size_t Align, typename Ret, typename ...Args>
-class function<CtxSize, Align, Ret(Args...)> {
+template <size_t CtxSize, size_t Align, bool Const, typename Ret, typename ...Args>
+class function<CtxSize, Align, Const, Ret(Args...)> : private std::conditional_t<(not Const), nonconst_executor_base<Ret, Args...>, dummy_executor_base>{
     using Func = Ret(Args...);
 
 public:
@@ -25,27 +26,9 @@ public:
 
     template <typename Functor> requires (not std::is_member_function_pointer_v<Functor>)
     function(Functor&& fctr) :
-        executer{
+        const_executor{
             []{
-                if constexpr (is_const_member_function_v<decltype(&Functor::operator())>)
-                {
-                    return [](std::byte* ctx, Args... args) {
-                        const Functor* l = reinterpret_cast<Functor*>(ctx);
-                        return (*l)(args...);
-                    };
-                }
-                else
-                {
-                    return [](std::byte* ctx, Args... args) {
-                        const Functor* l = reinterpret_cast<Functor*>(ctx);
-                        return (*l)(args...);
-                    };
-                }
-            }()
-        },
-        const_executer{
-            []{
-                if constexpr (is_const_member_function_v<decltype(&Functor::operator())>)
+                if constexpr (Const)
                 {
                     return [](const std::byte* ctx, Args... args) {
                         const Functor* l = reinterpret_cast<const Functor*>(ctx);
@@ -54,7 +37,7 @@ public:
                 }
                 else
                 {
-                    return [](const std::byte*) { throw std::bad_function_call(); };
+                    return [](const std::byte*, Args...) { throw std::bad_function_call(); };
                 }
             }()
         },
@@ -66,15 +49,19 @@ public:
         , func_type_info(typeid(Functor))
 #endif
     {
+        if constexpr (not Const)
+        {
+            // The only condition where underlying context may be modified
+            this->executor = [](std::byte* ctx, Args... args) {
+                Functor* l = reinterpret_cast<Functor*>(ctx);
+                return (*l)(args...);
+            };
+        }
         new (ctx_storage.data()) Functor{std::forward<Functor>(fctr)};
     }
 
     function(Ret(*ptr)(Args...)) :
-        executer{[](std::byte* ctx, Args ...args){
-            Func* f = *reinterpret_cast<Func**>(ctx);
-            return f(args...);
-        }},
-        const_executer{[](const std::byte* ctx, Args ...args){
+        const_executor{[](const std::byte* ctx, Args ...args){
             Func* f = *reinterpret_cast<Func**>(const_cast<std::byte*>(ctx));
             return f(args...);
         }},
@@ -88,11 +75,10 @@ public:
 
     template<typename T, typename Ret_, typename ...Args_>
     function(Ret_(T::*ptr)(Args_...)) :
-        executer{[](std::byte* ctx, T& obj, Args_ ...args){
-            Ret_(T::*f)(Args_...) = *reinterpret_cast<Ret_(T::**)(Args_...)>(ctx);
+        const_executor{[](const std::byte* ctx, T& obj, Args_ ...args){
+            Ret_(T::*f)(Args_...) = *reinterpret_cast<Ret_(T::**)(Args_...)>(const_cast<std::byte*>(ctx));
             return (obj.*f)(args...);
         }},
-        const_executer{[](const std::byte*, T&) { throw std::bad_function_call(); }},
         deleter{trivial_deleter}
 #ifdef std_function_compat
         , func_type_info{typeid(decltype(ptr))}
@@ -104,11 +90,7 @@ public:
 
     template<typename T, typename Ret_, typename ...Args_>
     function(Ret_(T::*ptr)(Args_...) const) :
-        executer{[](std::byte* ctx, const T& obj, Args_ ...args){
-            Ret_(T::*f)(Args_...) const = *reinterpret_cast<Ret_(T::**)(Args_...) const>(ctx);
-            return (obj.*f)(args...);
-        }},
-        const_executer{[](const std::byte* ctx, const T& obj, Args_ ...args){
+        const_executor{[](const std::byte* ctx, const T& obj, Args_ ...args){
             Ret_(T::*f)(Args_...) const = *reinterpret_cast<Ret_(T::**)(Args_...) const>(const_cast<std::byte*>(ctx));
             return (obj.*f)(args...);
         }},
@@ -129,24 +111,35 @@ public:
 
         deleter(ctx_storage.data());
 
-        if constexpr (is_const_member_function_v<decltype(&Functor::operator())>)
+        if constexpr (is_const_member_function_v<decltype(&Functor::operator())> and Const)
         {
-            executer = [](std::byte* ctx, Args... args) {
-                const Functor* l = reinterpret_cast<const Functor*>(ctx);
-                return (*l)(args...);
-            };
-            const_executer = [](const std::byte* ctx, Args... args) {
+            const_executor = [](const std::byte* ctx, Args... args) {
                 const Functor* l = reinterpret_cast<const Functor*>(ctx);
                 return (*l)(args...);
             };
         }
-        else
+        else if constexpr (is_const_member_function_v<decltype(&Functor::operator())> and not Const)
         {
-            executer = [](std::byte* ctx, Args... args) {
+            this->executor = [](std::byte* ctx, Args... args) {
                 Functor* l = reinterpret_cast<Functor*>(ctx);
                 return (*l)(args...);
             };
-            const_executer = [](const std::byte*) { throw std::bad_function_call(); };
+            const_executor = [](const std::byte* ctx, Args... args) {
+                const Functor* l = reinterpret_cast<const Functor*>(ctx);
+                return (*l)(args...);
+            };
+        }
+        else if constexpr (not is_const_member_function_v<decltype(&Functor::operator())> and not Const)
+        {
+            this->executor = [](std::byte* ctx, Args... args) {
+                Functor* l = reinterpret_cast<Functor*>(ctx);
+                return (*l)(args...);
+            };
+            const_executor = [](const std::byte* ctx, Args...){ throw std::bad_function_call{}; };
+        }
+        else
+        {
+            throw std::invalid_argument{"cannot assign functor with non const call operator to const qualified stack_based_function"};
         }
 
         deleter = [](const std::byte* ctx) {
@@ -169,11 +162,8 @@ public:
 
         deleter(ctx_storage.data());
 
-        executer = [](std::byte* ctx, Args ...args){
-            Func* f = *reinterpret_cast<Func**>(ctx);
-            return f(args...);
-        };
-        const_executer = [](const std::byte* ctx, Args ...args){
+        this->executor = nullptr;
+        const_executor = [](const std::byte* ctx, Args ...args){
             Func* f = *reinterpret_cast<Func**>(const_cast<std::byte*>(ctx));
             return f(args...);
         };
@@ -196,11 +186,8 @@ public:
 
         deleter(ctx_storage.data());
 
-        executer = [](std::byte* ctx, T& obj, Args_ ...args){
-            Ret_(T::*f)(Args_...) = *reinterpret_cast<Ret_(T::**)(Args_...)>(ctx);
-            return obj.*f(args...);
-        };
-        const_executer = [](const std::byte*, T&) { throw std::bad_function_call(); };
+        this->executor = nullptr;
+        const_executor = [](const std::byte*, T&, Args_...) { throw std::bad_function_call(); };
         deleter = trivial_deleter;
 
 #ifdef std_function_compat
@@ -220,11 +207,8 @@ public:
 
         deleter(ctx_storage.data());
 
-        executer = [](std::byte* ctx, const T& obj, Args_ ...args){
-            Func* f = *reinterpret_cast<Ret_(T::**)(Args_...) const>(ctx);
-            return obj.*f(args...);
-        };
-        const_executer = [](const std::byte* ctx, const T& obj, Args_ ...args){
+        this->executor = nullptr;
+        const_executor = [](const std::byte* ctx, const T& obj, Args_ ...args){
             Ret_(T::*f)(Args_...) const = *reinterpret_cast<Ret_(T::**)(Args_...) const>(const_cast<std::byte*>(ctx));
             return (obj.*f)(args...);
         };
@@ -239,8 +223,7 @@ public:
     }
 
     function() :
-        executer{[](std::byte*){ throw std::bad_function_call{}; }},
-        const_executer{[](const std::byte*){ throw std::bad_function_call{}; }},
+        const_executor{[](const std::byte*){ throw std::bad_function_call{}; }},
         deleter{trivial_deleter}
 #ifdef std_function_compat
         , func_type_info{typeid(void)}
@@ -248,8 +231,7 @@ public:
     {}
 
     function(std::nullptr_t) :
-        executer{[](std::byte*){ throw std::bad_function_call{}; }},
-        const_executer{[](const std::byte*){ throw std::bad_function_call{}; }},
+        const_executor{[](const std::byte*){ throw std::bad_function_call{}; }},
         deleter{trivial_deleter}
 #ifdef std_function_compat
         , func_type_info{typeid(void)}
@@ -261,19 +243,21 @@ public:
     function& operator=(const function&) = delete;
     function& operator=(function&&) = delete;
 
-    Ret operator()(Args... args)
+    template <bool C = Const>
+    typename std::enable_if_t<(not C), Ret>
+    operator()(Args... args)
     {
-        return executer(ctx_storage.data(), args...);
+        return this->executor(ctx_storage.data(), args...);
     }
 
     Ret operator()(Args... args) const
     {
-        return const_executer(ctx_storage.data(), args...);
+        return const_executor(ctx_storage.data(), args...);
     }
 
     operator bool() const noexcept
     {
-        return static_cast<bool>(executer) && static_cast<bool>(const_executer);
+        return static_cast<bool>(this->executer) && static_cast<bool>(const_executor);
     }
 
     bool operator==(std::nullptr_t) const noexcept
@@ -295,8 +279,7 @@ private:
     static void trivial_deleter(const std::byte*) {}
 
     alignas(Align) std::array<std::byte, CtxSize> ctx_storage;  // lambda capture
-    Ret(*executer)(std::byte*, Args...);
-    Ret(*const_executer)(const std::byte*, Args...);
+    Ret(*const_executor)(const std::byte*, Args...);
     void(*deleter)(const std::byte*);
 #ifdef std_function_compat
     std::reference_wrapper<const std::type_info> func_type_info;
@@ -307,19 +290,20 @@ struct S_;
 
 static constexpr std::size_t min_size_ = std::max(sizeof(void (S_::*)()), sizeof(void*));
 static constexpr std::size_t min_align_ = alignof(void (S_::*)());
+static constexpr bool IsConst = true;
 
 template <typename Functor>
 function(Functor&&) ->
-    function<std::max(sizeof(Functor), min_size_), std::max(alignof(Functor), min_align_), Signature<decltype(&Functor::operator())>>;
+    function<std::max(sizeof(Functor), min_size_), std::max(alignof(Functor), min_align_), is_const_member_function_v<decltype(&Functor::operator())>, Signature<decltype(&Functor::operator())>>;
 
 template <typename Ret, typename ...Args>
 function(Ret(*)(Args...)) ->
-    function<std::max(sizeof(Ret(*)(Args...)), min_size_) , std::max(alignof(Ret(*)(Args...)), min_align_), Ret(Args...)>;
+    function<std::max(sizeof(Ret(*)(Args...)), min_size_) , std::max(alignof(Ret(*)(Args...)), min_align_), IsConst, Ret(Args...)>;
 
 template <typename T, typename Ret_, typename ...Args_>
 function(Ret_(T::*)(Args_...)) ->
-    function<std::max(sizeof(Ret_(T::*)(Args_...)), min_size_), std::max(alignof(Ret_(T::*)(Args_...)), min_align_), Ret_(T&, Args_...)>;
+    function<std::max(sizeof(Ret_(T::*)(Args_...)), min_size_), std::max(alignof(Ret_(T::*)(Args_...)), min_align_), IsConst, Ret_(T&, Args_...)>;
 
 template <typename T, typename Ret_, typename ...Args_>
 function(Ret_(T::*)(Args_...) const) ->
-    function<std::max(sizeof(Ret_(T::*)(Args_...) const), min_size_), std::max(alignof(Ret_(T::*)(Args_...) const), min_align_), Ret_(const T&, Args_...)>;
+    function<std::max(sizeof(Ret_(T::*)(Args_...) const), min_size_), std::max(alignof(Ret_(T::*)(Args_...) const), min_align_), IsConst, Ret_(const T&, Args_...)>;
