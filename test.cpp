@@ -57,11 +57,11 @@ int main()
 
     // Benchmark
 
-    std::cout << "std::function " << sizeof(std::function<void()>) << "byte\nstack function " << sizeof(function<4, 8, IsConst, void()>) << "byte\n\n";
+    std::cout << "std::function " << sizeof(std::function<void()>) << "byte\nstack function " << sizeof(function<4, 8, Const, Trivial, void()>) << "byte\n\n";
 
     const size_t size = 5000000;
     std::vector<std::function<void()>> arr_function;
-    std::vector<function<4, 4, IsConst, void()>> arr_stack_function;
+    std::vector<function<4, 4, Const, Trivial, void()>> arr_stack_function;
 
     auto start = high_resolution_clock::now();
     for (size_t i = 0; i < size; i++)

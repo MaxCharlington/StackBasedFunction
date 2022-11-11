@@ -1,5 +1,7 @@
 #pragma once
 
+#include <bit>
+
 template<typename Ret, typename ...Args>
 struct nonconst_executor_base
 {
@@ -16,4 +18,3 @@ struct dummy_executor_base
 {
     [[no_unique_address]] dummy_executor executor;
 };
-
