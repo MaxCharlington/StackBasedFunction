@@ -9,11 +9,12 @@
 
 #include "args_helper.hpp"
 #include "const_member_function_helper.hpp"
+#include "lambda_capture_helper.hpp"
 #include "nonconst_executor.hpp"
 #include "nontrivial_deleter.hpp"
 #include "signature_helper.hpp"
 
-template<size_t CtxSize, size_t Align, bool Const, bool Trivial, typename Signature_>
+template<size_t CtxSize, size_t Align, bool Const, bool Trivial, typename Signature>
 class function;
 
 /* std::function replacement with stack storage */
@@ -22,14 +23,14 @@ class function<CtxSize, Align, Const, Trivial, Ret(Args...)> :
     private std::conditional_t<Const, dummy_executor_base, nonconst_executor_base<Ret, Args...>>,
     private std::conditional_t<Trivial, dummy_deleter_base, nontrivial_deleter_base>
 {
-    using Func = Ret(Args...);
-
 public:
+    using signature = Ret(Args...);
     using result_type = Ret;
     template<std::size_t N>
     using nth_argument = nth_argument<N, Args...>;
 
-    template <typename Functor> requires (not std::is_member_function_pointer_v<Functor>)
+    template <typename Functor>
+        requires Capturing<Functor> and (not std::is_member_function_pointer_v<Functor>)
     function(Functor&& fctr) :
         const_executor{
             []{
@@ -70,14 +71,15 @@ public:
 
     function(Ret(*ptr)(Args...)) :
         const_executor{[](const std::byte* ctx, Args ...args){
-            Func* f = *reinterpret_cast<Func**>(const_cast<std::byte*>(ctx));
+            Ret(*f)(Args...) = *reinterpret_cast<Ret(**)(Args...)>(const_cast<std::byte*>(ctx));
             return f(args...);
         }}
 #ifdef std_function_compat
         , func_type_info{typeid(decltype(ptr))}
 #endif
     {
-        new (ctx_storage.data()) Func*{ptr};
+        using FuncPtr = Ret(*)(Args...);
+        new (ctx_storage.data()) FuncPtr{ptr};
     }
 
     template<typename T, typename Ret_, typename ...Args_>
@@ -109,10 +111,11 @@ public:
     }
 
     template <typename Functor>
+        requires Capturing<Functor> and (not std::is_member_function_pointer_v<Functor>)
     function& operator=(Functor&& fctr) {
         static_assert(sizeof(Functor) <= CtxSize, "reassigned callable size should be less or equal than initial");
         static_assert(alignof(Functor) <= Align, "reassigned callable alignment should be less or equal than initial");
-        static_assert(std::is_same_v<Ret(Args...), Signature<decltype(&Functor::operator())>>, "reassigned callable signature should be the same as initial");
+        static_assert(std::is_same_v<Ret(Args...), ::Signature<decltype(&Functor::operator())>>, "reassigned callable signature should be the same as initial");
         static_assert(not(Trivial and not std::is_trivially_destructible_v<Functor>), "assigning to trivial stack_based_functon of not trivially destructible functor");
         static_assert(not(Const && not is_const_member_function_v<decltype(&Functor::operator())>), "assigning of functor with non const call operator to const qualified stack_based_function");
 
@@ -171,7 +174,7 @@ public:
 
         this->executor = nullptr;
         const_executor = [](const std::byte* ctx, Args ...args){
-            Func* f = *reinterpret_cast<Func**>(const_cast<std::byte*>(ctx));
+            Ret(*f)(Args...) = *reinterpret_cast<Ret(**)(Args...)>(const_cast<std::byte*>(ctx));
             return f(args...);
         };
 
@@ -179,7 +182,8 @@ public:
         func_type_info = typeid(decltype(ptr));
 #endif
 
-        new (ctx_storage.data()) Func*{ptr};
+        using FuncPtr = Ret(*)(Args...);
+        new (ctx_storage.data()) FuncPtr{ptr};
         return *this;
     }
 
@@ -195,8 +199,14 @@ public:
             this->deleter = trivial_deleter;
         }
 
-        this->executor = nullptr;
-        const_executor = [](const std::byte*, T&, Args_...) { throw std::bad_function_call(); };
+        if constexpr (not Const)
+        {
+            this->executor = [](std::byte*, Args...){ throw std::bad_function_call{}; };
+        }
+        const_executor = [](const std::byte* ctx, T& obj, Args_ ...args){
+            Ret_(T::*f)(Args_...) = *reinterpret_cast<Ret_(T::**)(Args_...)>(const_cast<std::byte*>(ctx));
+            return (obj.*f)(args...);
+        };
 
 #ifdef std_function_compat
         func_type_info = typeid(decltype(ptr));
@@ -218,7 +228,10 @@ public:
             this->deleter = trivial_deleter;
         }
 
-        this->executor = nullptr;
+        if constexpr (not Const)
+        {
+            this->executor = [](std::byte*, Args...){ throw std::bad_function_call{}; };
+        }
         const_executor = [](const std::byte* ctx, const T& obj, Args_ ...args){
             Ret_(T::*f)(Args_...) const = *reinterpret_cast<Ret_(T::**)(Args_...) const>(const_cast<std::byte*>(ctx));
             return (obj.*f)(args...);

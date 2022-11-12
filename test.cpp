@@ -25,8 +25,6 @@ int main()
 
     f();
 
-    f = [](){};
-
     function f2{[](){}};
 
     f2();
@@ -61,12 +59,16 @@ int main()
 
     const size_t size = 5000000;
     std::vector<std::function<void()>> arr_function;
-    std::vector<function<4, 4, Const, Trivial, void()>> arr_stack_function;
+    std::vector<function<40, 8, Const, false, void()>> arr_stack_function;
+
+    const auto l = [a = 0.5, b = 1.5, c = 7.5, d = 5.6, e = 3](){};
+    static_assert(sizeof(l) == 40);
+    static_assert(alignof(l) == 8);
 
     auto start = high_resolution_clock::now();
     for (size_t i = 0; i < size; i++)
     {
-        arr_function.push_back(foo2);
+        arr_function.push_back(l);
     }
     auto stop = high_resolution_clock::now();
     auto duration = duration_cast<microseconds>(stop - start);
@@ -75,7 +77,7 @@ int main()
     start = high_resolution_clock::now();
     for (size_t i = 0; i < size; i++)
     {
-        arr_function.push_back(foo2);
+        arr_function.push_back(l);
     }
     stop = high_resolution_clock::now();
     duration = duration_cast<microseconds>(stop - start);
