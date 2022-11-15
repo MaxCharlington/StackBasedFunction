@@ -1,1 +1,6 @@
+.build
+build
 a.out
+CMakeFiles
+cmake_install.cmake
+Makefile
