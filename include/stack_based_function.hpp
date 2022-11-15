@@ -37,7 +37,7 @@ public:
                 if constexpr (Const)
                 {
                     return [](const std::byte* ctx, Args... args) {
-                        const Functor* l = reinterpret_cast<const Functor*>(ctx);
+                        const Functor* l = std::bit_cast<const Functor*>(ctx);
                         return (*l)(args...);
                     };
                 }
@@ -55,14 +55,14 @@ public:
         {
             // The only condition where underlying context may be modified
             this->executor = [](std::byte* ctx, Args... args) {
-                Functor* l = reinterpret_cast<Functor*>(ctx);
+                Functor* l = std::bit_cast<Functor*>(ctx);
                 return (*l)(args...);
             };
         }
         if constexpr (not Trivial)
         {
             this->deleter = [](const std::byte* ctx) {
-                const Functor* l = reinterpret_cast<const Functor*>(ctx);
+                const Functor* l = std::bit_cast<const Functor*>(ctx);
                 l->~Functor();
             };
         }
@@ -71,7 +71,7 @@ public:
 
     function(Ret(*ptr)(Args...)) :
         const_executor{[](const std::byte* ctx, Args ...args){
-            Ret(*f)(Args...) = *reinterpret_cast<Ret(**)(Args...)>(const_cast<std::byte*>(ctx));
+            Ret(*f)(Args...) = *std::bit_cast<Ret(**)(Args...)>(ctx);
             return f(args...);
         }}
 #ifdef std_function_compat
@@ -85,7 +85,7 @@ public:
     template<typename T, typename Ret_, typename ...Args_>
     function(Ret_(T::*ptr)(Args_...)) :
         const_executor{[](const std::byte* ctx, T& obj, Args_ ...args){
-            Ret_(T::*f)(Args_...) = *reinterpret_cast<Ret_(T::**)(Args_...)>(const_cast<std::byte*>(ctx));
+            Ret_(T::*f)(Args_...) = *std::bit_cast<Ret_(T::**)(Args_...)>(ctx);
             return (obj.*f)(args...);
         }}
 #ifdef std_function_compat
@@ -99,7 +99,7 @@ public:
     template<typename T, typename Ret_, typename ...Args_>
     function(Ret_(T::*ptr)(Args_...) const) :
         const_executor{[](const std::byte* ctx, const T& obj, Args_ ...args){
-            Ret_(T::*f)(Args_...) const = *reinterpret_cast<Ret_(T::**)(Args_...) const>(const_cast<std::byte*>(ctx));
+            Ret_(T::*f)(Args_...) const = *std::bit_cast<Ret_(T::**)(Args_...) const>(ctx);
             return (obj.*f)(args...);
         }}
 #ifdef std_function_compat
@@ -122,7 +122,7 @@ public:
         if constexpr (not Trivial) {
             this->deleter(ctx_storage.data());
             this->deleter = [](const std::byte* ctx) {
-                const Functor* l = reinterpret_cast<const Functor*>(ctx);
+                const Functor* l = std::bit_cast<const Functor*>(ctx);
                 l->~Functor();
             };
         }
@@ -130,25 +130,25 @@ public:
         if constexpr (is_const_member_function_v<decltype(&Functor::operator())> and Const)
         {
             const_executor = [](const std::byte* ctx, Args... args) {
-                const Functor* l = reinterpret_cast<const Functor*>(ctx);
+                const Functor* l = std::bit_cast<const Functor*>(ctx);
                 return (*l)(args...);
             };
         }
         else if constexpr (is_const_member_function_v<decltype(&Functor::operator())> and not Const)
         {
             this->executor = [](std::byte* ctx, Args... args) {
-                Functor* l = reinterpret_cast<Functor*>(ctx);
+                Functor* l = std::bit_cast<Functor*>(ctx);
                 return (*l)(args...);
             };
             const_executor = [](const std::byte* ctx, Args... args) {
-                const Functor* l = reinterpret_cast<const Functor*>(ctx);
+                const Functor* l = std::bit_cast<const Functor*>(ctx);
                 return (*l)(args...);
             };
         }
         else
         {
             this->executor = [](std::byte* ctx, Args... args) {
-                Functor* l = reinterpret_cast<Functor*>(ctx);
+                Functor* l = std::bit_cast<Functor*>(ctx);
                 return (*l)(args...);
             };
             const_executor = [](const std::byte*, Args...){ throw std::bad_function_call{}; };
@@ -174,7 +174,7 @@ public:
 
         this->executor = nullptr;
         const_executor = [](const std::byte* ctx, Args ...args){
-            Ret(*f)(Args...) = *reinterpret_cast<Ret(**)(Args...)>(const_cast<std::byte*>(ctx));
+            Ret(*f)(Args...) = *std::bit_cast<Ret(**)(Args...)>(ctx);
             return f(args...);
         };
 
@@ -204,7 +204,7 @@ public:
             this->executor = [](std::byte*, Args...){ throw std::bad_function_call{}; };
         }
         const_executor = [](const std::byte* ctx, T& obj, Args_ ...args){
-            Ret_(T::*f)(Args_...) = *reinterpret_cast<Ret_(T::**)(Args_...)>(const_cast<std::byte*>(ctx));
+            Ret_(T::*f)(Args_...) = *std::bit_cast<Ret_(T::**)(Args_...)>(ctx);
             return (obj.*f)(args...);
         };
 
@@ -233,7 +233,7 @@ public:
             this->executor = [](std::byte*, Args...){ throw std::bad_function_call{}; };
         }
         const_executor = [](const std::byte* ctx, const T& obj, Args_ ...args){
-            Ret_(T::*f)(Args_...) const = *reinterpret_cast<Ret_(T::**)(Args_...) const>(const_cast<std::byte*>(ctx));
+            Ret_(T::*f)(Args_...) const = *std::bit_cast<Ret_(T::**)(Args_...) const>(ctx);
             return (obj.*f)(args...);
         };
 
