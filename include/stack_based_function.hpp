@@ -37,8 +37,8 @@ public:
                 if constexpr (Const)
                 {
                     return [](const std::byte* ctx, Args... args) {
-                        const Functor* l = std::bit_cast<const Functor*>(ctx);
-                        return (*l)(args...);
+                        const Functor& f = *std::bit_cast<const Functor*>(ctx);
+                        return f(args...);
                     };
                 }
                 else
@@ -55,23 +55,24 @@ public:
         {
             // The only condition where underlying context may be modified
             this->executor = [](std::byte* ctx, Args... args) {
-                Functor* l = std::bit_cast<Functor*>(ctx);
-                return (*l)(args...);
+                Functor& f = *std::bit_cast<Functor*>(ctx);
+                return f(args...);
             };
         }
         if constexpr (not Trivial)
         {
             this->deleter = [](const std::byte* ctx) {
-                const Functor* l = std::bit_cast<const Functor*>(ctx);
-                l->~Functor();
+                const Functor& f = *std::bit_cast<const Functor*>(ctx);
+                f.~Functor();
             };
         }
         new (ctx_storage.data()) Functor{std::forward<Functor>(fctr)};
     }
 
     function(Ret(*ptr)(Args...)) :
-        const_executor{[](const std::byte* ctx, Args ...args){
-            Ret(*f)(Args...) = *std::bit_cast<Ret(**)(Args...)>(ctx);
+        const_executor{[](const std::byte* ctx, Args ...args) {
+            using FuncPtr = Ret(*)(Args...);
+            FuncPtr f = *std::bit_cast<FuncPtr*>(ctx);
             return f(args...);
         }}
 #ifdef std_function_compat
@@ -85,7 +86,8 @@ public:
     template<typename T, typename Ret_, typename ...Args_>
     function(Ret_(T::*ptr)(Args_...)) :
         const_executor{[](const std::byte* ctx, T& obj, Args_ ...args){
-            Ret_(T::*f)(Args_...) = *std::bit_cast<Ret_(T::**)(Args_...)>(ctx);
+            using MemberPtr = Ret_(T::*)(Args_...);
+            MemberPtr f = *std::bit_cast<MemberPtr*>(ctx);
             return (obj.*f)(args...);
         }}
 #ifdef std_function_compat
@@ -99,7 +101,8 @@ public:
     template<typename T, typename Ret_, typename ...Args_>
     function(Ret_(T::*ptr)(Args_...) const) :
         const_executor{[](const std::byte* ctx, const T& obj, Args_ ...args){
-            Ret_(T::*f)(Args_...) const = *std::bit_cast<Ret_(T::**)(Args_...) const>(ctx);
+            using MemberPtr = Ret_(T::*)(Args_...) const;
+            MemberPtr f = *std::bit_cast<MemberPtr*>(ctx);
             return (obj.*f)(args...);
         }}
 #ifdef std_function_compat
@@ -122,34 +125,34 @@ public:
         if constexpr (not Trivial) {
             this->deleter(ctx_storage.data());
             this->deleter = [](const std::byte* ctx) {
-                const Functor* l = std::bit_cast<const Functor*>(ctx);
-                l->~Functor();
+                const Functor& f = *std::bit_cast<const Functor*>(ctx);
+                f.~Functor();
             };
         }
 
         if constexpr (is_const_member_function_v<decltype(&Functor::operator())> and Const)
         {
             const_executor = [](const std::byte* ctx, Args... args) {
-                const Functor* l = std::bit_cast<const Functor*>(ctx);
-                return (*l)(args...);
+                const Functor& f = *std::bit_cast<const Functor*>(ctx);
+                return f(args...);
             };
         }
         else if constexpr (is_const_member_function_v<decltype(&Functor::operator())> and not Const)
         {
             this->executor = [](std::byte* ctx, Args... args) {
-                Functor* l = std::bit_cast<Functor*>(ctx);
-                return (*l)(args...);
+                Functor& f = *std::bit_cast<Functor*>(ctx);
+                return f(args...);
             };
             const_executor = [](const std::byte* ctx, Args... args) {
-                const Functor* l = std::bit_cast<const Functor*>(ctx);
-                return (*l)(args...);
+                const Functor& f = *std::bit_cast<const Functor*>(ctx);
+                return f(args...);
             };
         }
         else
         {
             this->executor = [](std::byte* ctx, Args... args) {
-                Functor* l = std::bit_cast<Functor*>(ctx);
-                return (*l)(args...);
+                Functor& f = *std::bit_cast<Functor*>(ctx);
+                return f(args...);
             };
             const_executor = [](const std::byte*, Args...){ throw std::bad_function_call{}; };
         }
@@ -164,8 +167,9 @@ public:
 
     function& operator=(Ret(*ptr)(Args...))
     {
-        static_assert(sizeof(Ret(*)(Args...)) <= CtxSize, "reassigned callable size should be less or equal than initial");
-        static_assert(alignof(Ret(*)(Args...)) <= Align, "initial callable alingment should be alignment of a pointer to store this callable");
+        using FuncPtr = Ret(*)(Args...);
+        static_assert(sizeof(FuncPtr) <= CtxSize, "reassigned callable size should be less or equal than initial");
+        static_assert(alignof(FuncPtr) <= Align, "initial callable alingment should be alignment of a pointer to store this callable");
 
         if constexpr (not Trivial) {
             this->deleter(ctx_storage.data());
@@ -174,7 +178,7 @@ public:
 
         this->executor = nullptr;
         const_executor = [](const std::byte* ctx, Args ...args){
-            Ret(*f)(Args...) = *std::bit_cast<Ret(**)(Args...)>(ctx);
+            FuncPtr f = *std::bit_cast<FuncPtr*>(ctx);
             return f(args...);
         };
 
@@ -182,7 +186,6 @@ public:
         func_type_info = typeid(decltype(ptr));
 #endif
 
-        using FuncPtr = Ret(*)(Args...);
         new (ctx_storage.data()) FuncPtr{ptr};
         return *this;
     }
@@ -190,8 +193,9 @@ public:
     template<typename T, typename Ret_, typename ...Args_>
     function& operator=(Ret_(T::*ptr)(Args_...))
     {
-        static_assert(sizeof(Ret_(T::*)(Args_...)) <= CtxSize, "reassigned callable size should be less or equal than initial");
-        static_assert(alignof(Ret_(T::*)(Args_...)) <= Align, "initial callable alingment should be alignment of a pointer to store this callable");
+        using MemberPtr = Ret_(T::*)(Args...);
+        static_assert(sizeof(MemberPtr) <= CtxSize, "reassigned callable size should be less or equal than initial");
+        static_assert(alignof(MemberPtr) <= Align, "initial callable alingment should be alignment of a pointer to store this callable");
         static_assert(std::is_same_v<Ret(Args...), Ret_(T&, Args_...)>, "reassigned callable signature should be the same as initial");
 
         if constexpr (not Trivial) {
@@ -204,7 +208,7 @@ public:
             this->executor = [](std::byte*, Args...){ throw std::bad_function_call{}; };
         }
         const_executor = [](const std::byte* ctx, T& obj, Args_ ...args){
-            Ret_(T::*f)(Args_...) = *std::bit_cast<Ret_(T::**)(Args_...)>(ctx);
+            MemberPtr f = *std::bit_cast<MemberPtr*>(ctx);
             return (obj.*f)(args...);
         };
 
@@ -212,15 +216,15 @@ public:
         func_type_info = typeid(decltype(ptr));
 #endif
 
-        using MemberPtr = Ret_(T::*)(Args...);
         new (ctx_storage.data()) MemberPtr{ptr};
     }
 
     template<typename T, typename Ret_, typename ...Args_>
     function& operator=(Ret_(T::*ptr)(Args_...) const)
     {
-        static_assert(sizeof(Ret_(T::*)(Args_...) const) <= CtxSize, "reassigned callable size should be less or equal than initial");
-        static_assert(alignof(Ret_(T::*)(Args_...) const) <= Align, "initial callable alingment should be alignment of a pointer to store this callable");
+        using MemberPtr = Ret_(T::*)(Args_...) const;
+        static_assert(sizeof(MemberPtr const) <= CtxSize, "reassigned callable size should be less or equal than initial");
+        static_assert(alignof(MemberPtr const) <= Align, "initial callable alingment should be alignment of a pointer to store this callable");
         static_assert(std::is_same_v<Ret(Args...), Ret_(const T&, Args_...)>, "reassigned callable signature should be the same as initial");
 
         if constexpr (not Trivial) {
@@ -233,7 +237,7 @@ public:
             this->executor = [](std::byte*, Args...){ throw std::bad_function_call{}; };
         }
         const_executor = [](const std::byte* ctx, const T& obj, Args_ ...args){
-            Ret_(T::*f)(Args_...) const = *std::bit_cast<Ret_(T::**)(Args_...) const>(ctx);
+            MemberPtr f = *std::bit_cast<MemberPtr*>(ctx);
             return (obj.*f)(args...);
         };
 
@@ -241,7 +245,6 @@ public:
         func_type_info = typeid(decltype(ptr));
 #endif
 
-        using MemberPtr = Ret_(T::*)(Args_...) const;
         new (ctx_storage.data()) MemberPtr{ptr};
     }
 
