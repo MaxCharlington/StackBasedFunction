@@ -262,10 +262,17 @@ public:
     {}
 #endif
 
-    function(const function&) = delete;
-    function(function&&) noexcept = delete;
-    function& operator=(const function&) = delete;
-    function& operator=(function&&) = delete;
+    function(const function&) = default;
+    function(function&&) noexcept = default;
+    function& operator=(const function&) = default;
+    function& operator=(function&&) = default;
+
+    ~function()
+    {
+        if constexpr (not Trivial) {
+            this->deleter(ctx_storage.data());
+        }
+    }
 
     template <bool C = Const>
     typename std::enable_if_t<(not C), Ret>
