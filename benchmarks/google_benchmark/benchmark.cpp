@@ -4,7 +4,7 @@
 #include <vector>
 #include <stack_based_function.hpp>
 
-// https://quick-bench.com/q/Lgwq9aS6j0aFpoKuhB_noYEP_34
+// https://quick-bench.com/q/FMlFWvYfRnOg9zhiS7rqJHg4D_4
 
 static void BM_FunctionCreation(benchmark::State& state) {
     for (auto _ : state)
@@ -57,6 +57,24 @@ static void BM_StdFunctionInitVector(benchmark::State& state) {
 }
 BENCHMARK(BM_StdFunctionInitVector);
 
+struct F
+{
+    double a, b, c, d, e;
+    double operator()() { return d; }
+};
+
+static void BM_FunctorInitVector(benchmark::State& state) {
+    std::vector<F> v;
+    v.reserve(301*301);
+    for (auto _ : state)
+    {
+        for (size_t i = 0; i < v.capacity(); i++)
+            v.emplace_back(F{.a = 0.5, .b = 1.5, .c = 7.5, .d = 5.6, .e = 3});
+        v.clear();
+    }
+}
+BENCHMARK(BM_FunctorInitVector);
+
 static void BM_FunctionVectorRun(benchmark::State& state) {
     std::vector<function<40, 8, Const, false, double()>> v;
     v.reserve(301*301);
@@ -82,3 +100,18 @@ static void BM_StdFunctionVectorRun(benchmark::State& state) {
     }
 }
 BENCHMARK(BM_StdFunctionVectorRun);
+
+static void BM_FunctorVectorRun(benchmark::State& state) {
+    std::vector<F> v;
+    v.reserve(301*301);
+    for (size_t i = 0; i < v.capacity(); i++)
+        v.emplace_back(F{.a = 0.5, .b = 1.5, .c = 7.5, .d = 5.6, .e = 3});
+    v.clear();
+    for (auto _ : state)
+    {
+        for (auto& f : v)
+            auto r = f();
+    }
+}
+BENCHMARK(BM_FunctorVectorRun);
+
