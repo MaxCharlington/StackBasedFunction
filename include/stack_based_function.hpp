@@ -28,6 +28,7 @@ public:
     using result_type = Ret;
     template<std::size_t N>
     using nth_argument = nth_argument<N, Args...>;
+    static constexpr std::size_t n_arguments = sizeof...(Args);
 
     template <typename Functor>
         requires Capturing<Functor> and (not std::is_member_function_pointer_v<Functor>)
@@ -274,16 +275,17 @@ public:
         }
     }
 
-    template <bool C = Const>
+    template <typename ...Args_, bool C = Const>
     typename std::enable_if_t<(not C), Ret>
-    operator()(Args... args)
+    operator()(Args_&&... args)
     {
-        return this->executor(ctx_storage.data(), args...);
+        return this->executor(ctx_storage.data(), std::forward<Args_>(args)...);
     }
 
-    Ret operator()(Args... args) const
+    template <typename ...Args_>
+    Ret operator()(Args_&&... args) const
     {
-        return const_executor(ctx_storage.data(), args...);
+        return const_executor(ctx_storage.data(), std::forward<Args_>(args)...);
     }
 
 #ifdef std_function_compat
